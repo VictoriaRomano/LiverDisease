@@ -1,0 +1,253 @@
+---
+title: "Liver Disease Project"
+author: "Viktoriia Pylypets_Romaniuk"
+date: "2023-03-12"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Liver disease classification project
+### 1. Introduction
+Quick and accurate medical diagnoses are crucial for the successful treatment of diseases.
+The main goal of liver disease classification project is to train a machine learning algorithm that will predict if the patient has a liver disease or not with the highest possible accuracy, sensitivity and specificity, based on blood test result, age, and gender information. We put a lot of attention to specificity and sensitivity, because it is very important in medicine do not get false positive and false negative results. In the first case the patient will get unnecessary treatment, in the second case the patient will not get a treatment but needs it.
+For this project we got data set from Kaggle.com. This is the link: https://www.kaggle.com/datasets/abhi8923shriv/liver-disease-patient-dataset.
+This data set does not have a lot of projects on Kaggle.com site. In the Discussion section on the Kaggle.com we can find the description of the data set, given by the creator Abhishek Shrivastava. "This data set contains 10 variables, that are age, gender, total Bilirubin, direct Bilirubin, total proteins, albumin, A/G ratio, SGPT, SGOT, and Alkphos". Column #11 is "selector field used to split the data into two sets(assume, categories) (labeled by the experts) 1 Liver Patient, 2 Non Liver Patient"(1). 
+For learning purposes we assume that 1 means patient who has the liver disease, and 2 means the patient, who does not. And columns 3-10 are the blood test results. The data set consists of two tables, for our project we used the first one. The dataset, that we used, can be find on GitHub, using this link(2) https://github.com/VictoriaRomano/LiverDisease/blob/main/liver_patient.xls.
+
+
+### 2. Data exploratory and cleaning
+
+We can see that our data set is a table of 30691 rows and 11 columns. Also columns have long names that is not convenient to work with.
+
+```{r data }
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+
+# import needed libraries
+library(tidyverse)
+library(dplyr)
+library(tidyr)
+library(caret)
+library(readxl)
+library(ggplot2)
+
+#Import file
+liver_patient <- read_excel("liver_patient.xls")
+#Check the structure of the file
+head(liver_patient)
+str(liver_patient)
+```
+That's why we change names of columns for shorter ones.
+```{r changing names}
+#Change names of columns for shorter ones and more usable
+names(liver_patient) = c("age", "gender", "total_bil","direct_bil","aap","salam","sasam","total_prot","alb","ag_ratio", "result")
+head(liver_patient)
+```
+Next we check if we have some NA in the data set. We can see that we have 5425 cells with NA value.
+```{r checking na}
+#Check if there some NA
+sum(is.na(liver_patient))
+```
+We(assumed) have blood test results and  it is not safe to use some average values instead of NA for distinguishing if there is a disease. In this project we drop all rows with NA values.
+```{r drop na}
+# Drop rows with NA values
+liver_data <- drop_na(liver_patient)
+# Check if in the data no NA values left
+sum(is.na(liver_data))
+```
+After dropping all rows with NA values, we check the structure of our data set. Now it has 27 158 rows. It means we lost 3533 rows.It is not terrible for learning purposes and we continue to work with cleaned table.
+```{r srt after na drop}
+#Check the structure of the data without NA values
+str(liver_data)
+```
+### 3. Data analysis
+First of all we check if we have balanced data set. We plot numbers of patients with disease and without. From this figure we can see we have much bigger number of patients with disease than without. We could assume, that patients from the data set  were sent for the blood test to diagnose the certain condition, not for general health assessment. That's why we have an unbalanced data set. In this situation it is very important to assess not just accuracy of our algorithm, also specificity and sensitivity.
+
+```{r}
+#Plot numbers of patients with disease and without
+liver_data %>% ggplot(aes(result)) + geom_bar() + ggtitle(" Number of patients with disease and without")
+```
+Next we try to find if there are some relationships between age of patients and their age. From the plot we can see patients in the 1 and 2 result groups have almost the same age distribution.
+```{r plot age distr}
+# Plot age distribution in both groups
+liver_data  %>% ggplot(aes(result, age, group = result)) + geom_point()+
+  geom_boxplot() + ggtitle("Age distribution")
+```
+Then we check if there are some relationships between gender and results.From the table and plot we can not see that some gender are more tending to have a disease. 
+```{r male-female rel}
+# Calculate numbers of males and females in both groups (with disease and without)  
+gender_data <- liver_data  %>% group_by(gender) %>% summarise(liv_pat = sum(result =="1"), non_liv_pat = sum(result =="2"))
+gender_data
+# Make data tidy for visualization 
+plot_gender <- gender_data %>% gather(key = result,value = number, 2:3)
+plot_gender
+
+# Plot numbers of males and females in both groups
+plot_gender %>% ggplot(aes(x = result, y = number)) + geom_col(aes(fill = gender))+
+  ggtitle("Numbers of males and females in positive and negative groups")
+```
+After we plot all blood test results to see if we have some parameter which allows us to distinguish patients without machine learning algorithms. Also we can check if we have outliners or unusual results in different tests. Generally data looks good and results are in the possible range. But we can not say that any blood test has a strong correlation with the diagnosis.
+```{r combined plot}
+# Plot 8 combined plots(boxplots) to visualize blood results
+facet_liver <- gather(liver_data, key = "measure", value = "value", 
+                      c("total_bil", "direct_bil", "aap", "salam", "sasam",
+                        "total_prot", "alb", "ag_ratio"))
+ggplot(facet_liver, aes( x = result, y = value, group = result)) + geom_boxplot()+
+  facet_wrap(~ measure, scales = "free_y") + ggtitle("Blood test results in two groups")
+```
+
+### 4. Data preparation
+
+For data training and testing the final model we split our data into two sets - practice and final test set.
+Next the practice test we split for train and test set to try out different algorithms. Also we do not scale or normalize data, because using the original values as parameter values is more comprehensible(3) when you work with blood test results.
+
+```{r data splitting}
+# Splitting data for final test set for testing the final model(10% of liver_data set) 
+# and practice set for training different algorithms
+set.seed(4, sample.kind="Rounding") # if using R 3.6 or later
+
+test_index <- createDataPartition(y = liver_data$result, times = 1, p = 0.1, list = FALSE)
+practice_set <- liver_data[-test_index,]
+final_test <- liver_data[test_index,]
+
+# Create train and test set from practice set
+set.seed(6, sample.kind="Rounding") # if using R 3.6 or later
+test_index <- createDataPartition(y = practice_set$result, times = 1,
+                                  p = 0.2, list = FALSE)
+train_set <- practice_set[-test_index,]
+test_set <- practice_set[test_index,]
+```
+### 5.Methods and analysis.
+### 5.1. Classification tree model
+At first, we try classification tree model. From the table we can see that this model  has low accuracy (0.835) and very low specificity(0.559)
+```{r classification tree}
+# Classification tree model
+train_rpart <- train(as.factor(result)~.,method = "rpart", data = train_set)
+plot(train_rpart)
+
+rpart_model <- confusionMatrix(predict(train_rpart, test_set),
+                               as.factor(test_set$result))
+
+#Make tibble with model results
+model_result <- tibble(Model = "Classification tree",
+                       Accuracy = rpart_model$overall["Accuracy"],
+                       Sensitivity = rpart_model$byClass["Sensitivity"],
+                       Specificity = rpart_model$byClass["Specificity"])
+model_result
+```
+Next we try to tune classification tree model. Now we get much better results. Our accuracy, sensitivity and specificity are close to 1. From the plot we can see that this result we get when complexity parameter is 0, which can lead us to over fitting.
+```{r}
+# Classification tree model with tuning
+train_rpart_t <- train(as.factor(result)~.,method = "rpart",
+                       tuneGrid = data.frame(cp = seq(0.0, 0.1, len = 20)),
+                       data = train_set)
+plot(train_rpart_t)
+
+tuned_rpart_model <- confusionMatrix(predict(train_rpart_t, test_set), as.factor(test_set$result))
+
+#Adding to tibble tuned classification tree model results
+
+model_result <- bind_rows(model_result,tibble(Model = "Classification tree with tuning",
+                       Accuracy = tuned_rpart_model$overall["Accuracy"],
+                       Sensitivity = tuned_rpart_model$byClass["Sensitivity"],
+                       Specificity = tuned_rpart_model$byClass["Specificity"]))
+model_result
+```
+
+
+### 5.2. Generalized linear model
+Our next attempt is to try generalized linear model. It does not give a good result. This model gives accuracy = 0.725
+
+```{r glm model, echo=FALSE}
+# Generalized linear model
+train_glm <- train(as.factor(result)~., method = "glm", data = train_set)
+glm_model <- confusionMatrix(predict(train_glm, test_set), as.factor(test_set$result))
+
+#Adding to tibble Generalized linear model results
+
+model_result <- bind_rows(model_result,tibble(Model = "Generalized linear model",
+                                              Accuracy = glm_model$overall["Accuracy"],
+                                              Sensitivity = glm_model$byClass["Sensitivity"],
+                                              Specificity = glm_model$byClass["Specificity"]))
+model_result
+
+```
+### 5.3. K-nearest neighbors model 
+After we try k-nearest neighbors model with default parameters and with trainControl. Both model gives us almost the same results: accuracy = 0.96, sensitivity = 0.97 and specificity = 0.94. These results are better than glm model and classification tree model with default parameters.
+```{r knn model}
+#k-nearest neighbors model
+train_knn <- train(as.factor(result)~.,method = "knn", data = train_set)
+knn_model <- confusionMatrix(predict(train_knn, test_set), as.factor(test_set$result))
+
+#Adding to tibble k-nearest neighbors model results
+
+model_result <- bind_rows(model_result,tibble(Model = "k-nearest neighbors model",
+                                              Accuracy = knn_model$overall["Accuracy"],
+                                              Sensitivity = knn_model$byClass["Sensitivity"],
+                                              Specificity = knn_model$byClass["Specificity"]))
+model_result
+
+#k-nearest neighbors model with trainControl
+control <- trainControl(method = "cv", number = 10, p = 0.9)
+train_knn_cv <- train(as.factor(result)~., method = "knn", data = train_set,
+                      trControl = control)
+ggplot(train_knn_cv, highlight = TRUE)
+knn_cv_model <- confusionMatrix(predict(train_knn_cv, test_set), as.factor(test_set$result))
+
+#Adding to tibble k-nearest neighbors model with trainControl results
+
+model_result <- bind_rows(model_result,tibble(Model = "k-nearest neighbors model with trainControl",
+                                              Accuracy = knn_cv_model$overall["Accuracy"],
+                                              Sensitivity = knn_cv_model$byClass["Sensitivity"],
+                                              Specificity = knn_cv_model$byClass["Specificity"]))
+model_result
+
+```
+### 5.4. Random forest model
+
+As we can see from the table the random forest model gives us the best results. We get Accuracy, Sensitivity and Specificity = 1.
+```{r random forest}
+#Random forest model
+set.seed(6, sample.kind = "Rounding")
+train_rf <- train(as.factor(result)~., method = "rf", data = train_set)
+rf_model <- confusionMatrix(predict(train_rf, test_set), as.factor(test_set$result))
+
+#Adding to tibble random forest model results
+
+model_result <- bind_rows(model_result,tibble(Model = "Random forest",
+                                              Accuracy = rf_model$overall["Accuracy"],
+                                              Sensitivity = rf_model$byClass["Sensitivity"],
+                                              Specificity = rf_model$byClass["Specificity"]))
+model_result
+
+```
+### 6.Results. Random forest model on the final test.
+On the final test random forest model gives accuracy, sensitivity, and specificity almost = 1, which is a very good performance.
+```{r final test}
+#Trying random forest model on the final test set
+final_results <- confusionMatrix(predict(train_rf, final_test), as.factor(final_test$result))
+
+#Adding to tibble final test results
+
+model_result <- bind_rows(model_result,tibble(Model = "Final test",
+                                              Accuracy = final_results$overall["Accuracy"],
+                                              Sensitivity = final_results$byClass["Sensitivity"],
+                                              Specificity = final_results$byClass["Specificity"]))
+model_result
+```
+### 7. Conclusion
+
+Random forest model predicts if the patient has the liver disease with almost 100% accuracy, specificity and sensitivity. All other tried models(classification tree, generalized linear model, k- nearest neighbors) did not give us the same good result. Classification tree with complexity parameter = 0 gives us almost the same results as random forest model on the training test set, but using this value of complexity parameter could cause overfitting and model could not work good on the new data.  
+At this project we trained our algorithm on the data set with no missing values, but in the real life it is not the case. The future work it is to create an model, that will be able to work with missing values. Also we have to think with what value we can replace NA(get a consultation with doctors?). Random forest model could perform good in the data set with missing values.
+
+
+
+## References
+1.https://www.kaggle.com/datasets/abhi8923shriv/liver-disease-patient-dataset/discussion/201685
+
+2.https://github.com/VictoriaRomano/LiverDisease/blob/main/liver_patient.xls
+
+3. Gregor Guncar, Matjaz kukar,Matejia Notar, Miran Bvar, Peter Cernelc, Manca Notar & Marco Notar.An application of machine learning to haematological diagnosis, Scientific Reports 8, Article number:411(2018)
